@@ -83,8 +83,12 @@ docs/       検証計画
 ```bash
 cd infra
 npm ci
-npx cdk deploy AgentCoreEvalCicd-Bootstrap -c githubRepo=<owner>/<repo>
+npx cdk deploy AgentCoreEvalCicd-Bootstrap \
+  -c githubSubPrefix=$(gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix)
 ```
+
+GitHub の新しいリポジトリでは、OIDC トークンの `sub` が `repo:owner@<ownerId>/repo@<repoId>:...` という ID 入りの形式になる。
+`repo:owner/repo:...` で信頼ポリシーを書くと `Not authorized to perform sts:AssumeRoleWithWebIdentity` で失敗する。
 
 GitHub の OIDC プロバイダ、ECR 2 つ、ロール 3 つができる。出力されたロール ARN を控える。
 
