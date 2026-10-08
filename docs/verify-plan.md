@@ -46,4 +46,3 @@ R1 を見逃した場合は、「問いごとの最低点」や「重要な問�
 - 各回の評価器別の平均、問いごとの点（`eval/results/raw.json` を Actions の artifact に保存する）
 - ゲートの所要時間（Actions の実行時間）
 - 費用（Evaluations の入出力トークン。CloudWatch の料金は別）
-<!-- r0b -->
