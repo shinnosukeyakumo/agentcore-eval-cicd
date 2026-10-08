@@ -92,7 +92,9 @@ export class BootstrapStack extends cdk.Stack {
     evalRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['bedrock-agentcore:Evaluate', 'bedrock-agentcore:GetEvaluator'],
-        resources: ['arn:aws:bedrock-agentcore:::evaluator/Builtin.*'],
+        // 組み込み評価器でも IAM 上はリージョン・アカウント付きの ARN で認可される
+        // （API が返す evaluatorArn は arn:aws:bedrock-agentcore:::evaluator/Builtin.* だが、それでは許可されない）
+        resources: [`arn:aws:bedrock-agentcore:${this.region}:${this.account}:evaluator/Builtin.*`],
       }),
     );
     evalRole.addToPolicy(
