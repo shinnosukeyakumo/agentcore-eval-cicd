@@ -71,7 +71,7 @@ docs/       検証計画
 
 ## セットアップ
 
-> 2026-10-08 時点で未検証。Bootstrap スタックのデプロイから通しで確かめた後に、この注記を外す。
+> 2026-10-08 に、この手順で Bootstrap から stg デプロイまで通しで確かめた。検証結果は [docs/verify-results.md](docs/verify-results.md)。
 
 ### 前提
 
