@@ -9,7 +9,8 @@ const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: REGION };
 
 new BootstrapStack(app, 'AgentCoreEvalCicd-Bootstrap', {
   env,
-  githubRepo: app.node.tryGetContext('githubRepo') ?? 'shinnosukeyakumo/agentcore-eval-cicd',
+  githubSubPrefix:
+    app.node.tryGetContext('githubSubPrefix') ?? 'repo:shinnosukeyakumo@95732356/agentcore-eval-cicd@1410313181',
 });
 
 // imageTag を渡したときだけ環境スタックを合成する（Bootstrap 単独デプロイ時は不要なため）

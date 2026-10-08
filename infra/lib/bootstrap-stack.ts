@@ -5,8 +5,11 @@ import { Construct } from 'constructs';
 import { PREFIX, Stage, repositoryName, runtimeName } from './config';
 
 export interface BootstrapStackProps extends cdk.StackProps {
-  /** "owner/repo" 形式 */
-  readonly githubRepo: string;
+  /**
+   * OIDC トークンの sub の接頭辞。GitHub の新しいリポジトリは ID 入りの形式
+   * （repo:owner@ownerId/repo@repoId）が既定。gh api repos/<owner>/<repo>/actions/oidc/customization/sub で確認できる
+   */
+  readonly githubSubPrefix: string;
 }
 
 /**
@@ -43,7 +46,7 @@ export class BootstrapStack extends cdk.Stack {
         },
       });
 
-    const repo = props.githubRepo;
+    const subPrefix = props.githubSubPrefix;
     const runtimeArn = (stage: Stage) =>
       // ランタイム本体とその endpoint（.../runtime-endpoint/DEFAULT）の両方に一致させる
       `arn:aws:bedrock-agentcore:${this.region}:${this.account}:runtime/${runtimeName(stage)}-*`;
@@ -68,19 +71,20 @@ export class BootstrapStack extends cdk.Stack {
     // ② dev へのマージ後: ビルドして dev へデプロイ
     const devDeploy = new iam.Role(this, 'DevDeployRole', {
       roleName: `${PREFIX}-gha-dev-deploy`,
-      assumedBy: githubPrincipal(`repo:${repo}:environment:dev`),
+      assumedBy: githubPrincipal(`${subPrefix}:environment:dev`),
       maxSessionDuration: cdk.Duration.hours(1),
     });
     devDeploy.addToPolicy(cdkRoles);
     devDeploy.addToPolicy(ecrLogin);
     repos.dev.grantPullPush(devDeploy);
+    repos.dev.grant(devDeploy, 'ecr:DescribeImages');
     devDeploy.addToPolicy(listRuntimes);
     devDeploy.addToPolicy(invokeRuntime('dev'));
 
     // ③ dev→stg の PR: dev Runtime を呼び出して評価する。デプロイ権限は持たせない
     const evalRole = new iam.Role(this, 'EvalRole', {
       roleName: `${PREFIX}-gha-eval`,
-      assumedBy: githubPrincipal(`repo:${repo}:pull_request`),
+      assumedBy: githubPrincipal(`${subPrefix}:pull_request`),
       maxSessionDuration: cdk.Duration.hours(1),
     });
     evalRole.addToPolicy(listRuntimes);
@@ -88,7 +92,9 @@ export class BootstrapStack extends cdk.Stack {
     evalRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['bedrock-agentcore:Evaluate', 'bedrock-agentcore:GetEvaluator'],
-        resources: ['arn:aws:bedrock-agentcore:::evaluator/Builtin.*'],
+        // 組み込み評価器でも IAM 上はリージョン・アカウント付きの ARN で認可される
+        // （API が返す evaluatorArn は arn:aws:bedrock-agentcore:::evaluator/Builtin.* だが、それでは許可されない）
+        resources: [`arn:aws:bedrock-agentcore:${this.region}:${this.account}:evaluator/Builtin.*`],
       }),
     );
     evalRole.addToPolicy(
@@ -109,7 +115,7 @@ export class BootstrapStack extends cdk.Stack {
     // ④ 手動の stg デプロイ: dev の ECR から stg の ECR へコピーしてデプロイ
     const stgDeploy = new iam.Role(this, 'StgDeployRole', {
       roleName: `${PREFIX}-gha-stg-deploy`,
-      assumedBy: githubPrincipal(`repo:${repo}:environment:stg`),
+      assumedBy: githubPrincipal(`${subPrefix}:environment:stg`),
       maxSessionDuration: cdk.Duration.hours(1),
     });
     stgDeploy.addToPolicy(cdkRoles);
@@ -117,6 +123,7 @@ export class BootstrapStack extends cdk.Stack {
     repos.dev.grantPull(stgDeploy);
     repos.dev.grant(stgDeploy, 'ecr:DescribeImages');
     repos.stg.grantPullPush(stgDeploy);
+    repos.stg.grant(stgDeploy, 'ecr:DescribeImages');
     stgDeploy.addToPolicy(listRuntimes);
     stgDeploy.addToPolicy(invokeRuntime('stg'));
 

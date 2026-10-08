@@ -47,10 +47,21 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          digest() { aws ecr describe-images --repository-name "$1" --image-ids imageTag="$TAG" \
-                       --query 'imageDetails[0].imageDigest' --output text 2>/dev/null; }
-          SRC=$(digest "$SRC_REPO") || { echo "::error::dev の ECR にタグ $TAG がない。dev で評価済みのコードか確かめよ"; exit 1; }
-          DST=$(digest "$DST_REPO") || DST=""
+          # タグが無ければ空文字を返す。権限エラーなどは失敗させる
+          digest() {
+            local out
+            if out=$(aws ecr describe-images --repository-name "$1" --image-ids imageTag="$TAG" \
+                       --query 'imageDetails[0].imageDigest' --output text 2>&1); then
+              echo "$out"
+            elif grep -q ImageNotFoundException <<<"$out"; then
+              echo ""
+            else
+              echo "$out" >&2; return 1
+            fi
+          }
+          SRC=$(digest "$SRC_REPO")
+          [ -n "$SRC" ] || { echo "::error::dev の ECR にタグ $TAG がない。dev で評価済みのコードか確かめよ"; exit 1; }
+          DST=$(digest "$DST_REPO")
           if [ -z "$DST" ]; then
             crane copy "$REGISTRY/$SRC_REPO@$SRC" "$REGISTRY/$DST_REPO:$TAG"
             DST=$(digest "$DST_REPO")
