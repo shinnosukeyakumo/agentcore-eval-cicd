@@ -29,6 +29,8 @@ from botocore.exceptions import ClientError
 
 HERE = Path(__file__).parent
 REGION = os.environ.get("AWS_REGION", "ap-northeast-1")
+# スパンの取り込み途中に Evaluate が返すエラー。揃うまで待てば解消する
+INGESTION_PENDING_ERRORS = ("no span documents", "no spans to evaluate")
 TRAJECTORY_EVALUATORS = {
     "Builtin.TrajectoryInOrderMatch",
     "Builtin.TrajectoryExactOrderMatch",
@@ -97,8 +99,8 @@ def score(client: EvaluationClient, runtime_id: str, run: Run, evaluators: list[
             reference_inputs=ref,
         )
     except ClientError as e:
-        # ログイベントがスパンより先に CloudWatch に届くことがある。その間は未完了として待つ
-        if "no span documents" not in str(e):
+        # ログイベントやスパンの一部が先に CloudWatch に届くことがある。その間は未完了として待つ
+        if not any(m in str(e) for m in INGESTION_PENDING_ERRORS):
             raise
         run.results = []
     return run
