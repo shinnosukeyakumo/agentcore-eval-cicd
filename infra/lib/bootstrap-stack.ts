@@ -77,6 +77,7 @@ export class BootstrapStack extends cdk.Stack {
     devDeploy.addToPolicy(cdkRoles);
     devDeploy.addToPolicy(ecrLogin);
     repos.dev.grantPullPush(devDeploy);
+    repos.dev.grant(devDeploy, 'ecr:DescribeImages');
     devDeploy.addToPolicy(listRuntimes);
     devDeploy.addToPolicy(invokeRuntime('dev'));
 
@@ -120,6 +121,7 @@ export class BootstrapStack extends cdk.Stack {
     repos.dev.grantPull(stgDeploy);
     repos.dev.grant(stgDeploy, 'ecr:DescribeImages');
     repos.stg.grantPullPush(stgDeploy);
+    repos.stg.grant(stgDeploy, 'ecr:DescribeImages');
     stgDeploy.addToPolicy(listRuntimes);
     stgDeploy.addToPolicy(invokeRuntime('stg'));
 
