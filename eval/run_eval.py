@@ -89,12 +89,18 @@ def score(client: EvaluationClient, runtime_id: str, run: Run, evaluators: list[
     )
     if not run.case.get("expected_trajectory"):
         evaluators = [e for e in evaluators if e not in TRAJECTORY_EVALUATORS]
-    run.results = client.run(
-        evaluator_ids=evaluators,
-        session_id=run.session_id,
-        agent_id=runtime_id,
-        reference_inputs=ref,
-    )
+    try:
+        run.results = client.run(
+            evaluator_ids=evaluators,
+            session_id=run.session_id,
+            agent_id=runtime_id,
+            reference_inputs=ref,
+        )
+    except ClientError as e:
+        # ログイベントがスパンより先に CloudWatch に届くことがある。その間は未完了として待つ
+        if "no span documents" not in str(e):
+            raise
+        run.results = []
     return run
 
 
