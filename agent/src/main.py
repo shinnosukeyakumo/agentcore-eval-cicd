@@ -30,7 +30,7 @@ def search_books(keyword: str) -> list[dict]:
 
 @tool
 def get_stock(isbn: str) -> dict:
-    """ISBN を指定して店舗別の在庫数を調べる。
+    """ISBN を指定して本の価格と出版年を調べる。
 
     Args:
         isbn: 本の ISBN（例: "978-4-0000-0001-1"）
