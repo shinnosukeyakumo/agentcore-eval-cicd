@@ -1,0 +1,28 @@
+# CloudWatch Omni IDE 拡張のローカル設定（トークンを含む）
+.omni/
+.env.omni
+
+# エディタ・エージェント設定
+.claude/
+.cursor/
+.kiro/
+.agents/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# CDK / Node
+infra/node_modules/
+infra/cdk.out/
+infra/**/*.js
+infra/**/*.d.ts
+!infra/jest.config.js
+
+# 評価結果
+eval/results/
+
+.DS_Store

@@ -1,0 +1,81 @@
+# ④ stg へのデプロイは手動。Actions 画面の「Run workflow」で stg ブランチを選んで起動する。
+# イメージはビルドし直さず、dev の ECR から評価済みのものを digest ごとコピーする。
+name: deploy-stg
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-stg
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/stg'
+    runs-on: ubuntu-24.04
+    environment: stg
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-1
+      SRC_REPO: agentcore-eval-cicd/agent-dev
+      DST_REPO: agentcore-eval-cicd/agent-stg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: stg ブランチの agent/ の中身からイメージタグを計算
+        id: tag
+        run: echo "tag=$(git rev-parse HEAD:agent)" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_STG_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+
+      - name: dev の ECR から stg の ECR へ digest ごとコピー
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          digest() { aws ecr describe-images --repository-name "$1" --image-ids imageTag="$TAG" \
+                       --query 'imageDetails[0].imageDigest' --output text 2>/dev/null; }
+          SRC=$(digest "$SRC_REPO") || { echo "::error::dev の ECR にタグ $TAG がない。dev で評価済みのコードか確かめよ"; exit 1; }
+          DST=$(digest "$DST_REPO") || DST=""
+          if [ -z "$DST" ]; then
+            crane copy "$REGISTRY/$SRC_REPO@$SRC" "$REGISTRY/$DST_REPO:$TAG"
+            DST=$(digest "$DST_REPO")
+          fi
+          {
+            echo "| | digest |"; echo "|---|---|"
+            echo "| dev | \`$SRC\` |"; echo "| stg | \`$DST\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$SRC" = "$DST" ] || { echo "::error::digest が一致しない"; exit 1; }
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: cdk deploy (stg)
+        working-directory: infra
+        run: |
+          npm ci
+          npx cdk deploy AgentCoreEvalCicd-stg -c imageTag=${{ steps.tag.outputs.tag }} --require-approval never
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: 疎通確認
+        run: |
+          uv sync --locked --group eval
+          uv run python eval/run_eval.py --runtime-name michikusa_stg --smoke \
+            --expected-image-tag ${{ steps.tag.outputs.tag }}

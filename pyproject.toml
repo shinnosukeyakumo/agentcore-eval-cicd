@@ -1,0 +1,22 @@
+[project]
+name = "agentcore-eval-cicd"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "ruff==0.16.10"]
+eval = ["bedrock-agentcore==1.24.1", "boto3==1.43.109"]
+
+[tool.pytest.ini_options]
+pythonpath = ["agent/src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bookstore", "main"]

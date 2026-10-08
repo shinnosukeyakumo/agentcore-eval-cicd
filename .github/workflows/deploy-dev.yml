@@ -1,0 +1,76 @@
+# ② dev へのマージ後に自動で動く。テストが通ったら dev 環境へデプロイする。
+name: deploy-dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+# 実行中のデプロイは止めない。待機中は最新の 1 件だけが残る
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-1
+      REPO: agentcore-eval-cicd/agent-dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: イメージタグ（agent/ の中身のハッシュ）を計算
+        id: tag
+        run: echo "tag=$(git rev-parse HEAD:agent)" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: ビルドして ECR へ push（同じ中身のイメージがあれば省略）
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          if aws ecr describe-images --repository-name "$REPO" --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+            echo "イメージ $TAG は ECR にあるため build を省略" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            docker build -t "$REGISTRY/$REPO:$TAG" agent
+            docker push "$REGISTRY/$REPO:$TAG"
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: cdk deploy (dev)
+        working-directory: infra
+        run: |
+          npm ci
+          npx cdk deploy AgentCoreEvalCicd-dev -c imageTag=${{ steps.tag.outputs.tag }} --require-approval never
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: 疎通確認
+        run: |
+          uv sync --locked --group eval
+          uv run python eval/run_eval.py --runtime-name michikusa_dev --smoke \
+            --expected-image-tag ${{ steps.tag.outputs.tag }}

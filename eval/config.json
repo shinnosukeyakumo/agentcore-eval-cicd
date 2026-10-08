@@ -1,0 +1,11 @@
+{
+  "trials": 3,
+  "concurrency": 4,
+  "thresholds": {
+    "Builtin.GoalSuccessRate": 0.8,
+    "Builtin.Correctness": 0.8,
+    "Builtin.ToolSelectionAccuracy": 0.8,
+    "Builtin.ToolParameterAccuracy": 0.8,
+    "Builtin.TrajectoryInOrderMatch": 0.8
+  }
+}

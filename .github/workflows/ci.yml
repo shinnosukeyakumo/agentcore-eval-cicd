@@ -1,0 +1,46 @@
+# ① feature → dev の PR で動くテスト。AWS には触らない。
+# deploy-dev.yml からも呼び出し、マージ後に同じテストを通ったものだけをデプロイする。
+name: ci
+
+on:
+  pull_request:
+    branches: [dev]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv sync --locked --group dev --group eval
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
+
+  cdk:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      # 認証情報なしで合成できることを確かめる（imageTag はダミー）
+      - run: npx cdk synth -q -c imageTag=ci
+
+  docker:
+    # AgentCore Runtime は arm64 のイメージを要求する。公開リポジトリなら arm64 ランナーも無料
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -t agent:ci agent
