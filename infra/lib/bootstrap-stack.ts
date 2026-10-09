@@ -2,7 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
-import { PREFIX, Stage, repositoryName, runtimeName } from './config';
+import { PREFIX, RepoStage, Stage, repositoryName, runtimeName } from './config';
 
 export interface BootstrapStackProps extends cdk.StackProps {
   /**
@@ -25,7 +25,7 @@ export class BootstrapStack extends cdk.Stack {
       clientIds: ['sts.amazonaws.com'],
     });
 
-    const repos = {} as Record<Stage, ecr.Repository>;
+    const repos = {} as Record<RepoStage, ecr.Repository>;
     for (const stage of ['dev', 'stg'] as const) {
       repos[stage] = new ecr.Repository(this, `AgentRepo-${stage}`, {
         repositoryName: repositoryName(stage),
@@ -81,14 +81,31 @@ export class BootstrapStack extends cdk.Stack {
     devDeploy.addToPolicy(listRuntimes);
     devDeploy.addToPolicy(invokeRuntime('dev'));
 
-    // ③ dev→stg の PR: dev Runtime を呼び出して評価する。デプロイ権限は持たせない
+    // ③ release/* → stg の PR: rc Runtime をリリース候補のイメージに差し替えて評価する。
+    // cdk deploy は使わず UpdateAgentRuntime で rc のイメージだけを替えるので、CDK のロールは渡さない
     const evalRole = new iam.Role(this, 'EvalRole', {
       roleName: `${PREFIX}-gha-eval`,
       assumedBy: githubPrincipal(`${subPrefix}:pull_request`),
       maxSessionDuration: cdk.Duration.hours(1),
     });
     evalRole.addToPolicy(listRuntimes);
-    evalRole.addToPolicy(invokeRuntime('dev'));
+    evalRole.addToPolicy(invokeRuntime('rc'));
+    evalRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock-agentcore:UpdateAgentRuntime'],
+        resources: [runtimeArn('rc')],
+      }),
+    );
+    evalRole.addToPolicy(
+      // UpdateAgentRuntime は実行ロールの指定を必須とするため、rc の実行ロールだけを渡せるようにする
+      new iam.PolicyStatement({
+        actions: ['iam:PassRole'],
+        resources: [`arn:aws:iam::${this.account}:role/AgentCoreEvalCicd-rc-*`],
+        conditions: { StringEquals: { 'iam:PassedToService': 'bedrock-agentcore.amazonaws.com' } },
+      }),
+    );
+    // リリース候補のイメージが dev の ECR にあるかを確かめる
+    repos.dev.grant(evalRole, 'ecr:DescribeImages');
     evalRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['bedrock-agentcore:Evaluate', 'bedrock-agentcore:GetEvaluator'],
@@ -103,7 +120,7 @@ export class BootstrapStack extends cdk.Stack {
         actions: ['logs:StartQuery'],
         resources: [
           `arn:aws:logs:${this.region}:${this.account}:log-group:aws/spans:*`,
-          `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/${runtimeName('dev')}-*`,
+          `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/${runtimeName('rc')}-*`,
         ],
       }),
     );

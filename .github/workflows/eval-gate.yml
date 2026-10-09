@@ -1,4 +1,5 @@
-# ③ dev → stg の PR で動く関所。dev 環境で動いているエージェントを評価し、
+# ③ release/* → stg の PR で動く関所。
+# リリース候補のイメージ（dev へのマージ時にビルド済み）を rc Runtime に差し替えて評価する。
 # 閾値を下回ればこのチェックが失敗する（stg ブランチの保護ルールでマージを止める）。
 name: eval-gate
 
@@ -7,20 +8,18 @@ on:
     branches: [stg]
     types: [opened, synchronize, reopened]
 
-# PR が更新されたら古い評価は打ち切る
+# rc Runtime は 1 つしかないので、評価は同時に 1 件だけ。待機中は最新の 1 件が残る
 concurrency:
-  group: eval-gate-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: rc-runtime
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   evaluate:
-    # このリポジトリ自身の dev ブランチからの PR だけを評価する（フォークからの PR では動かさない）
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
@@ -28,6 +27,18 @@ jobs:
     env:
       AWS_REGION: ap-northeast-1
     steps:
+      # ジョブに if: を付けると条件外で skipped になり、必須チェックを素通りしてしまう。
+      # そのため条件外は明示的に失敗させる
+      - name: release/* からの PR か確かめる
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] || [[ "$HEAD_REF" != release/* ]]; then
+            echo "::error::stg へは、このリポジトリの release/* ブランチからの PR だけを受け付ける（head: $HEAD_REPO:$HEAD_REF）"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -43,14 +54,16 @@ jobs:
           mask-aws-account-id: true
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv sync --locked --group eval
 
-      - name: dev Runtime を評価
-        id: eval
+      - name: rc Runtime をリリース候補のイメージに差し替える
+        # release を切った直後で dev のビルドが終わっていなければ、最大 15 分待つ
+        run: uv run python eval/deploy_rc.py --image-tag ${{ steps.tag.outputs.tag }} --wait-image-seconds 900
+
+      - name: rc Runtime を評価
         run: |
-          uv sync --locked --group eval
-          # dev へのデプロイが追いついていなければ最大 15 分待つ
-          uv run python eval/run_eval.py --runtime-name michikusa_dev \
-            --expected-image-tag ${{ steps.tag.outputs.tag }} --wait-image-seconds 900
+          uv run python eval/run_eval.py --runtime-name michikusa_rc \
+            --expected-image-tag ${{ steps.tag.outputs.tag }}
 
       - name: PR に結果をコメント
         if: always() && hashFiles('eval/results/report.md') != ''

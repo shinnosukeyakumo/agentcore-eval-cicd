@@ -7,5 +7,8 @@
     "Builtin.ToolSelectionAccuracy": 0.8,
     "Builtin.ToolParameterAccuracy": 0.8,
     "Builtin.TrajectoryInOrderMatch": 0.8
+  },
+  "critical": {
+    "Builtin.Correctness": 1.0
   }
 }

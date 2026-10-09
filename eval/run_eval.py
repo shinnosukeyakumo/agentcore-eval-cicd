@@ -8,7 +8,9 @@
   1. Runtime を名前で探し、READY か・期待したイメージで動いているかを確かめる
   2. データセットの問いを 1 問 1 セッションで投げる（trials 回くり返す）
   3. スパンが CloudWatch に届くのを待ち、AgentCore Evaluations で採点する
-  4. 評価器ごとの平均を閾値と比べ、下回れば終了コード 1
+  4. 評価器ごとの平均を閾値と比べる。重要な問い（critical）は 1 試行でも最低点を下回れば不合格
+
+終了コード: 0 = 合格 / 1 = 不合格 / 2 = 採点不能（スパンが揃わない等。点が低いのとは区別する）
 """
 
 import argparse
@@ -84,13 +86,20 @@ def invoke(data, runtime_arn: str, run: Run) -> Run:
     return run
 
 
+def case_evaluators(case: dict, evaluators: list[str]) -> list[str]:
+    """問いごとに使う評価器。正解の軌跡が無い問いでは軌跡系を、skip_evaluators に挙げたものを外す。"""
+    skip = set(case.get("skip_evaluators", []))
+    if not case.get("expected_trajectory"):
+        skip |= TRAJECTORY_EVALUATORS
+    return [e for e in evaluators if e not in skip]
+
+
 def score(client: EvaluationClient, runtime_id: str, run: Run, evaluators: list[str]) -> Run:
     ref = ReferenceInputs(
         expected_response=run.case.get("expected_response"),
         expected_trajectory=run.case.get("expected_trajectory"),
     )
-    if not run.case.get("expected_trajectory"):
-        evaluators = [e for e in evaluators if e not in TRAJECTORY_EVALUATORS]
+    evaluators = case_evaluators(run.case, evaluators)
     try:
         run.results = client.run(
             evaluator_ids=evaluators,
@@ -109,16 +118,48 @@ def score(client: EvaluationClient, runtime_id: str, run: Run, evaluators: list[
 def is_complete(run: Run, evaluators: list[str]) -> bool:
     """スパンの取り込みが途中だと一部の評価器しか結果を返さないため、揃うまで待つ。"""
     got = {r["evaluatorId"] for r in run.results if r.get("value") is not None}
-    needed = set(evaluators)
-    if not run.case.get("expected_trajectory"):
-        needed -= TRAJECTORY_EVALUATORS
+    needed = set(case_evaluators(run.case, evaluators))
     # ツールを呼ばない問いでは TOOL_CALL 評価器の対象がない
     if not run.case.get("expected_trajectory"):
         needed -= {"Builtin.ToolSelectionAccuracy", "Builtin.ToolParameterAccuracy"}
     return needed <= got
 
 
-def write_report(runs: list[Run], thresholds: dict, averages: dict, passed: bool, header: str) -> str:
+def score_all(client: EvaluationClient, runtime_id: str, runs: list[Run], evaluators: list[str], workers: int):
+    """スパンが揃うまで待ちながら採点する。期限までに揃わなかったものを返す。"""
+    print("スパンの取り込みを待つ...")
+    time.sleep(60)
+    pending = [r for r in runs if r.answer]
+    deadline = time.time() + 600
+    while pending and time.time() < deadline:
+        with ThreadPoolExecutor(workers) as pool:
+            scored = list(pool.map(lambda r: score(client, runtime_id, r, evaluators), pending))
+        pending = [r for r in scored if not is_complete(r, evaluators)]
+        if pending:
+            print(f"未完了 {len(pending)} 件。30 秒後に再試行")
+            time.sleep(30)
+    return pending
+
+
+def critical_violations(runs: list[Run], critical: dict[str, float]) -> list[str]:
+    """重要な問いで、1 試行でも最低点を下回ったものを挙げる。平均では埋もれる致命的な誤りを拾う。"""
+    out = []
+    for run in runs:
+        if not run.case.get("critical"):
+            continue
+        for r in run.results:
+            floor = critical.get(r["evaluatorId"])
+            if floor is not None and r.get("value") is not None and r["value"] < floor:
+                out.append(f"{run.case['id']}#{run.trial} {r['evaluatorId']}={r['value']:.2f}（最低 {floor}）")
+    return out
+
+
+VERDICT_LABEL = {"PASS": "✅ 合格", "FAIL": "❌ 不合格", "INCOMPLETE": "⚠️ 採点不能（再実行せよ）"}
+
+
+def write_report(
+    runs: list[Run], thresholds: dict, averages: dict, violations: list[str], verdict: str, header: str
+) -> str:
     lines = [f"## {header}", ""]
     lines += ["| 評価器 | 平均 | 閾値 | 件数 | 判定 |", "|---|---:|---:|---:|---|"]
     for name, th in thresholds.items():
@@ -128,7 +169,12 @@ def write_report(runs: list[Run], thresholds: dict, averages: dict, passed: bool
             continue
         avg, n = vals
         lines.append(f"| {name} | {avg:.2f} | {th} | {n} | {'✅' if avg >= th else '❌'} |")
-    lines += ["", f"**総合判定: {'✅ 合格' if passed else '❌ 不合格'}**", ""]
+    if violations:
+        lines += ["", "**重要な問いでの誤答**", ""] + [f"- {v}" for v in violations]
+    incomplete = [f"{r.case['id']}#{r.trial}" for r in runs if not r.answer or not r.results]
+    if incomplete:
+        lines += ["", f"**採点できなかったセッション**: {', '.join(incomplete)}"]
+    lines += ["", f"**総合判定: {VERDICT_LABEL[verdict]}**", ""]
 
     lines += ["<details><summary>問いごとの結果</summary>", ""]
     lines += ["| 問い | 試行 | " + " | ".join(n.removeprefix("Builtin.") for n in thresholds) + " |"]
@@ -192,19 +238,19 @@ def main() -> None:
     for r in failed_invokes:
         print(f"⚠️ 呼び出し失敗 {r.case['id']}#{r.trial}: {r.error}")
 
-    # スパンが CloudWatch に届くまで待つ（資料により 30 秒〜数分）
-    print("スパンの取り込みを待つ...")
-    time.sleep(60)
     client = EvaluationClient(region_name=REGION)
-    pending = [r for r in runs if r.answer]
-    deadline = time.time() + 600
-    while pending and time.time() < deadline:
-        with ThreadPoolExecutor(config["concurrency"]) as pool:
-            scored = list(pool.map(lambda r: score(client, runtime["agentRuntimeId"], r, evaluators), pending))
-        pending = [r for r in scored if not is_complete(r, evaluators)]
-        if pending:
-            print(f"未完了 {len(pending)} 件。30 秒後に再試行")
-            time.sleep(30)
+    workers = config["concurrency"]
+    pending = score_all(client, runtime["agentRuntimeId"], runs, evaluators, workers)
+
+    # 期限までにスパンが揃わなかったセッションは、新しいセッションで 1 度だけ投げ直す
+    if pending:
+        print(f"採点できなかった {len(pending)} 件を新しいセッションで投げ直す")
+        retried = [Run(r.case, r.trial, str(uuid.uuid4())) for r in pending]
+        with ThreadPoolExecutor(workers) as pool:
+            retried = list(pool.map(lambda r: invoke(data, runtime["agentRuntimeArn"], r), retried))
+        pending = score_all(client, runtime["agentRuntimeId"], retried, evaluators, workers)
+        by_key = {(r.case["id"], r.trial): r for r in retried}
+        runs = [by_key.get((r.case["id"], r.trial), r) for r in runs]
 
     values: dict[str, list[float]] = defaultdict(list)
     for run in runs:
@@ -212,13 +258,19 @@ def main() -> None:
             if r.get("value") is not None:
                 values[r["evaluatorId"]].append(r["value"])
     averages = {name: (mean(v), len(v)) for name, v in values.items()}
-    passed = (
-        not failed_invokes
-        and not pending
-        and all(name in averages and averages[name][0] >= th for name, th in thresholds.items())
-    )
+    violations = critical_violations(runs, config.get("critical", {}))
+    below = [name for name, th in thresholds.items() if name in averages and averages[name][0] < th]
+    missing = [name for name in thresholds if name not in averages]
+    # 点が低いことが確定していれば不合格。そうでなく採点が欠けていれば採点不能
+    if below or violations:
+        verdict = "FAIL"
+    elif failed_invokes or pending or missing:
+        verdict = "INCOMPLETE"
+    else:
+        verdict = "PASS"
 
-    report = write_report(runs, thresholds, averages, passed, f"エージェント評価: {args.runtime_name} ({image_tag})")
+    header = f"エージェント評価: {args.runtime_name} ({image_tag})"
+    report = write_report(runs, thresholds, averages, violations, verdict, header)
     print(report)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -244,7 +296,7 @@ def main() -> None:
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a") as f:
             f.write(report)
-    sys.exit(0 if passed else 1)
+    sys.exit({"PASS": 0, "FAIL": 1, "INCOMPLETE": 2}[verdict])
 
 
 if __name__ == "__main__":

@@ -3,47 +3,76 @@
     "id": "search-tag",
     "prompt": "天文の本にはどんなものがありますか？",
     "expected_response": "「はじめての夜空観察」（星野ひかり、1,980円）と「望遠鏡のえらびかた」（星野ひかり、2,420円）の2冊があります。",
-    "expected_trajectory": ["search_books"]
+    "expected_trajectory": [
+      "search_books"
+    ]
   },
   {
     "id": "stock-one-store",
     "prompt": "「ベランダで育てるハーブ」は梅田店に在庫がありますか？",
     "expected_response": "梅田店に4冊あります。",
-    "expected_trajectory": ["search_books", "get_stock"]
+    "expected_trajectory": [
+      "search_books",
+      "get_stock"
+    ],
+    "critical": true
   },
   {
     "id": "stock-none",
     "prompt": "「望遠鏡のえらびかた」の在庫を教えてください。",
     "expected_response": "渋谷店・梅田店・札幌店のいずれも在庫がありません（0冊）。",
-    "expected_trajectory": ["search_books", "get_stock"]
+    "expected_trajectory": [
+      "search_books",
+      "get_stock"
+    ],
+    "critical": true
   },
   {
     "id": "shipping-remote",
     "prompt": "1,980円の本を1冊、北海道に送ると送料はいくらですか？",
     "expected_response": "送料は1,200円で、合計3,180円です。",
-    "expected_trajectory": ["calc_shipping"]
+    "expected_trajectory": [
+      "calc_shipping"
+    ],
+    "critical": true
   },
   {
     "id": "shipping-free",
     "prompt": "「ひとりで学ぶPython」を東京都に配送すると、送料込みでいくらになりますか？",
     "expected_response": "本体3,080円で送料は無料のため、合計3,080円です。",
-    "expected_trajectory": ["search_books", "calc_shipping"]
+    "expected_trajectory": [
+      "search_books",
+      "calc_shipping"
+    ],
+    "critical": true
   },
   {
     "id": "shipping-sum",
     "prompt": "畑中みのりさんの本を2冊とも沖縄県に送ったら、合計はいくらですか？",
     "expected_response": "「週末ではじめる家庭菜園」1,650円と「ベランダで育てるハーブ」1,430円で小計3,080円。3,000円以上なので送料無料となり、合計3,080円です。",
-    "expected_trajectory": ["search_books", "calc_shipping"]
+    "expected_trajectory": [
+      "search_books",
+      "calc_shipping"
+    ],
+    "critical": true
   },
   {
     "id": "stock-filter",
     "prompt": "林こうじさんの本で、札幌店に在庫があるものはどれですか？",
     "expected_response": "「読みやすいコードの作法」が札幌店に6冊あります。「ひとりで学ぶPython」は札幌店に在庫がありません。",
-    "expected_trajectory": ["search_books", "get_stock"]
+    "expected_trajectory": [
+      "search_books",
+      "get_stock"
+    ],
+    "critical": true
   },
   {
     "id": "out-of-scope",
     "prompt": "ポイントカードはありますか？",
-    "expected_response": "ポイントカードについては分かりかねます。"
+    "expected_response": "ポイントカードについては分かりかねます。",
+    "critical": true,
+    "skip_evaluators": [
+      "Builtin.GoalSuccessRate"
+    ]
   }
 ]
