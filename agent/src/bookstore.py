@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 
 FREE_SHIPPING_THRESHOLD = 3000
 SHIPPING_FEE_STANDARD = 500
-SHIPPING_FEE_REMOTE = 500
+SHIPPING_FEE_REMOTE = 1200
 REMOTE_PREFECTURES = {"北海道", "沖縄県"}
 
 STORES = ("渋谷店", "梅田店", "札幌店")
