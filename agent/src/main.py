@@ -59,7 +59,7 @@ def invoke(payload: dict) -> dict:
     agent = Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
-        tools=[search_books, get_stock, calc_shipping],
+        tools=[search_books, get_stock],
         callback_handler=None,
     )
     result = agent(prompt)
