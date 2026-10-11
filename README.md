@@ -5,7 +5,6 @@
 **AgentCore Evaluations で採点し、合格したエージェントだけを stg に上げる CI/CD**
 
 [![deploy-dev](https://github.com/shinnosukeyakumo/agentcore-eval-cicd/actions/workflows/deploy-dev.yml/badge.svg?branch=dev)](https://github.com/shinnosukeyakumo/agentcore-eval-cicd/actions/workflows/deploy-dev.yml)
-[![eval-gate](https://github.com/shinnosukeyakumo/agentcore-eval-cicd/actions/workflows/eval-gate.yml/badge.svg)](https://github.com/shinnosukeyakumo/agentcore-eval-cicd/actions/workflows/eval-gate.yml)
 
 ![Amazon Bedrock AgentCore](https://img.shields.io/badge/Amazon_Bedrock-AgentCore-01A88D?logo=amazonwebservices&logoColor=white)
 ![Strands Agents](https://img.shields.io/badge/Strands-Agents-232F3E)
