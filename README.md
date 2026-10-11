@@ -1,3 +1,10 @@
+[![deploy-dev](https://github.com/shinnosukeyakumo/agentcore-eval-cicd/actions/workflows/deploy-dev.yml/badge.svg?branch=dev)](https://github.com/shinnosukeyakumo/agentcore-eval-cicd/actions/workflows/deploy-dev.yml)
+![Amazon Bedrock AgentCore](https://img.shields.io/badge/Amazon_Bedrock-AgentCore-01A88D?logo=amazonwebservices&logoColor=white)
+![Strands Agents](https://img.shields.io/badge/Strands-Agents-232F3E)
+![AWS CDK](https://img.shields.io/badge/AWS_CDK-TypeScript-3178C6?logo=typescript&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-OIDC-2088FF?logo=githubactions&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+
 AgentCore Runtime 上のエージェントを GitHub Actions で dev → stg に上げるときに、AgentCore Evaluations で採点して、点が足りなければ stg へマージできないようにする仕組みの検証用リポジトリです。
 
 ![コンテナイメージが dev の ECR から dev・rc・stg の各 Runtime へ流れる構成](docs/images/architecture.drawio.png)
