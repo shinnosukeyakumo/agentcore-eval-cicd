@@ -33,6 +33,8 @@ HERE = Path(__file__).parent
 REGION = os.environ.get("AWS_REGION", "ap-northeast-1")
 # スパンの取り込み途中に Evaluate が返すエラー。揃うまで待てば解消する
 INGESTION_PENDING_ERRORS = ("no span documents", "no spans to evaluate")
+# ツール呼び出しが 1 件も無いセッションでは結果を返さない評価器
+TOOL_CALL_EVALUATORS = {"Builtin.ToolSelectionAccuracy", "Builtin.ToolParameterAccuracy"}
 TRAJECTORY_EVALUATORS = {
     "Builtin.TrajectoryInOrderMatch",
     "Builtin.TrajectoryExactOrderMatch",
@@ -118,10 +120,9 @@ def score(client: EvaluationClient, runtime_id: str, run: Run, evaluators: list[
 def is_complete(run: Run, evaluators: list[str]) -> bool:
     """スパンの取り込みが途中だと一部の評価器しか結果を返さないため、揃うまで待つ。"""
     got = {r["evaluatorId"] for r in run.results if r.get("value") is not None}
-    needed = set(case_evaluators(run.case, evaluators))
-    # ツールを呼ばない問いでは TOOL_CALL 評価器の対象がない
-    if not run.case.get("expected_trajectory"):
-        needed -= {"Builtin.ToolSelectionAccuracy", "Builtin.ToolParameterAccuracy"}
+    # ツール系は、エージェントがツールを呼ばなければ結果が出ない。正解の軌跡があっても
+    # 呼ばないこと自体が劣化でありうるので、完了の条件には含めない（軌跡の評価器で拾う）
+    needed = set(case_evaluators(run.case, evaluators)) - TOOL_CALL_EVALUATORS
     return needed <= got
 
 

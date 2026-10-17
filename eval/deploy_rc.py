@@ -84,12 +84,17 @@ def main() -> None:
         agentRuntimeArtifact={"containerConfiguration": {"containerUri": new_uri}},
         **{k: current[k] for k in CARRY_OVER if current.get(k) is not None},
     )
+    # 更新直後は status が READY のまま残ることがある。version が上がって READY になるまで待つ
+    old_version = current["agentRuntimeVersion"]
     deadline = time.time() + 600
-    while (status := control.get_agent_runtime(agentRuntimeId=runtime_id)["status"]) != "READY":
-        if status.endswith("FAILED") or time.time() > deadline:
-            sys.exit(f"❌ rc の更新が {status} で止まった")
+    while True:
+        rt = control.get_agent_runtime(agentRuntimeId=runtime_id)
+        if rt["status"] == "READY" and rt["agentRuntimeVersion"] != old_version:
+            break
+        if rt["status"].endswith("FAILED") or time.time() > deadline:
+            sys.exit(f"❌ rc の更新が {rt['status']}（version {rt['agentRuntimeVersion']}）で止まった")
         time.sleep(10)
-    print("rc の差し替え完了")
+    print(f"rc の差し替え完了（version {old_version} → {rt['agentRuntimeVersion']}）")
 
 
 if __name__ == "__main__":

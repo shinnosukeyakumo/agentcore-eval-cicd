@@ -26,6 +26,7 @@ jobs:
       pull-requests: write
     env:
       AWS_REGION: ap-northeast-1
+      PYTHONUNBUFFERED: "1"
     steps:
       # ジョブに if: を付けると条件外で skipped になり、必須チェックを素通りしてしまう。
       # そのため条件外は明示的に失敗させる
