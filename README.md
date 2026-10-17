@@ -31,7 +31,7 @@ flowchart LR
 | release/* → stg の PR | [`eval-gate.yml`](.github/workflows/eval-gate.yml) | rc Runtime のイメージを差し替えて評価。不合格ならマージ不可 | eval |
 | 手動（stg ブランチ） | [`deploy-stg.yml`](.github/workflows/deploy-stg.yml) | dev の ECR から stg の ECR へ digest ごとコピー → stg Runtime を更新 | stg-deploy |
 
-AWS へは OIDC で入り、ロールは用途ごとに分けています。評価用のロールでできるのは、rc Runtime のイメージ差し替えと採点だけです。
+dev と stg は別の AWS アカウントです。GitHub Actions からは OIDC で入り、ロールは用途ごとに分けています。評価用のロールは dev アカウントにしかなく、できるのは rc Runtime のイメージ差し替えと採点だけです。stg への昇格では、stg アカウントのロールが dev アカウントの ECR からイメージを読み、stg の ECR へコピーします。dev の ECR のリポジトリポリシーで、読み取りを許しているのはこのロールだけです。
 
 ECR のタグには `agent/` フォルダのツリーハッシュ（`git rev-parse HEAD:agent`）を使っています。release ブランチを切ったり stg にマージしたりしてコミット SHA が変わっても、`agent/` の中身が同じなら同じタグになるので、dev でビルドしたイメージを stg 側から特定できます。ECR はタグの上書きを禁止（IMMUTABLE）しています。
 
@@ -59,7 +59,7 @@ ECR のタグには `agent/` フォルダのツリーハッシュ（`git rev-par
 
 ## 検証結果
 
-わざと劣化させた変更を、feature → dev → release → stg の流れで実際に流して確かめました。
+わざと劣化させた変更を、feature → dev → release → stg の流れで実際に流して確かめました。V1〜V6 は 1 アカウントの中で環境を分けて、V7 は stg を別アカウントにして試しています。
 
 | # | 試したこと | 結果 | 評価の所要 |
 |---|---|---|---:|
@@ -69,6 +69,7 @@ ECR のタグには `agent/` フォルダのツリーハッシュ（`git rev-par
 | V4 | dev から stg へ直接 PR | 評価の前に失敗し、マージできなかった | - |
 | V5 | 送料ツールを外す | 不合格 | 13分18秒 |
 | V6 | 正常なリリース | 合格。rc の差し替えは 11 秒 | 4分22秒 |
+| V7 | stg を別アカウントに分けて正常なリリース | 合格。アカウントをまたいだコピー後も digest が一致 | 6分18秒 |
 
 経緯と数字の詳細は [docs/verify-results.md](docs/verify-results.md) にあります。
 
@@ -82,6 +83,8 @@ ECR のタグには `agent/` フォルダのツリーハッシュ（`git rev-par
 | `GoalSuccessRate` が、範囲外の問いへの正しい拒否を 0 点にし、誤った送料案内を満点にした | 範囲外の問いは対象から外した |
 | UpdateAgentRuntime の直後は status が READY のまま返ることがある | version が上がって READY になるまで待つようにした |
 | 新しい GitHub リポジトリは OIDC の `sub` が `repo:owner@<id>/repo@<id>:...` の形式になっている | 信頼ポリシーをこの形式で書いた |
+| 新しい AWS アカウントでは、Anthropic の利用目的の申請を出すまで Claude を呼べない（申請前に一度だけ通ったが、すぐに拒否されるようになった） | 申請を出した。疎通確認の失敗は `500 from runtime` としか出ないので、原因は Runtime のログで確かめる |
+| ツールを呼ばずに推測で金額を当てた回答を、Correctness は満点にした | `TrajectoryInOrderMatch` が 0 点で拾った |
 
 ## ディレクトリ
 
@@ -98,37 +101,46 @@ eval/
 tests/            ツールの単体テスト
 ```
 
-リージョンは東京（ap-northeast-1）、モデルは `jp.anthropic.claude-haiku-4-5-20251001-v1:0` です。dev と stg は本来アカウントを分ける想定ですが、ここでは 1 アカウントの中で ECR・Runtime・ロールを分けて再現しています。
+リージョンは東京（ap-northeast-1）、モデルは `jp.anthropic.claude-haiku-4-5-20251001-v1:0` です。dev アカウントに dev と rc の Runtime、stg アカウントに stg の Runtime を置いています。
 
 ## セットアップ
 
 <details>
 <summary>手順</summary>
 
-前提として、CloudWatch Transaction Search を有効にし、ap-northeast-1 で `cdk bootstrap` を済ませておきます。
+前提として、dev と stg の 2 つのアカウントを用意し、次を済ませておきます。
 
-### 1. Bootstrap スタック
+- 両アカウントで `cdk bootstrap`（ap-northeast-1）
+- 両アカウントで Bedrock の Anthropic の利用目的の申請（新しいアカウントは、これを出すまで Claude を呼べない）
+- dev アカウントで CloudWatch Transaction Search を有効にする（評価に使う）
 
-手元から 1 回だけデプロイします。OIDC プロバイダ、ECR 2 つ、ロール 3 つができます。
+### 1. 土台のスタック
+
+手元から 1 回だけデプロイします。dev の ECR のリポジトリポリシーが stg のロールを名指しするので、stg を先にデプロイします。
 
 ```bash
 cd infra
 npm ci
-npx cdk deploy AgentCoreEvalCicd-Bootstrap \
-  -c githubSubPrefix=$(gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix)
+CTX="-c devAccount=<dev のアカウント ID> -c stgAccount=<stg のアカウント ID> \
+  -c githubSubPrefix=$(gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix)"
+npx cdk deploy AgentCoreEvalCicd-StgBootstrap --profile <stg のプロファイル> $CTX
+npx cdk deploy AgentCoreEvalCicd-Bootstrap --profile <dev のプロファイル> $CTX
 ```
+
+stg には OIDC プロバイダ・stg の ECR・stg デプロイ用ロール、dev には OIDC プロバイダ・dev の ECR・dev デプロイ用ロール・評価用ロールができます。
 
 ### 2. GitHub の設定
 
 - ブランチ `dev`（既定）と `stg` を作る
 - Environments に `dev` と `stg` を作る（`stg` に承認者を付けると、手動デプロイの前に承認を挟める）
-- Repository secrets に、出力されたロール ARN を登録する
+- Repository secrets に、出力されたロール ARN と dev のアカウント ID を登録する
 
 | secret | 値 |
 |---|---|
 | `AWS_DEV_DEPLOY_ROLE_ARN` | DevDeployRoleArn |
 | `AWS_EVAL_ROLE_ARN` | EvalRoleArn |
-| `AWS_STG_DEPLOY_ROLE_ARN` | StgDeployRoleArn |
+| `AWS_STG_DEPLOY_ROLE_ARN` | StgDeployRoleArn（stg アカウント） |
+| `AWS_DEV_ACCOUNT_ID` | dev のアカウント ID（stg へのコピー元の ECR を指すのに使う） |
 
 - ブランチ保護で、`stg` は `evaluate` を、`dev` は `python` / `cdk` / `docker` を必須チェックにする
 
