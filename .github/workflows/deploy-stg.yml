@@ -1,5 +1,6 @@
 # ④ stg へのデプロイは手動。Actions 画面の「Run workflow」で stg ブランチを選んで起動する。
-# イメージはビルドし直さず、dev の ECR から評価済みのものを digest ごとコピーする。
+# イメージはビルドし直さず、dev アカウントの ECR から評価済みのものを
+# stg アカウントの ECR へ digest ごとコピーする。
 name: deploy-stg
 
 on:
@@ -37,20 +38,35 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           mask-aws-account-id: true
 
-      - id: ecr
-        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      - name: コピー元（dev）とコピー先（stg）のアカウントを決める
+        id: accounts
+        env:
+          DEV_ACCOUNT: ${{ secrets.AWS_DEV_ACCOUNT_ID }}
+        run: |
+          STG_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$STG_ACCOUNT"
+          [ -n "$DEV_ACCOUNT" ] || { echo "::error::secret AWS_DEV_ACCOUNT_ID が未設定"; exit 1; }
+          { echo "dev=$DEV_ACCOUNT"; echo "stg=$STG_ACCOUNT"; } >> "$GITHUB_OUTPUT"
+
+      # 別アカウントの dev の ECR と、自分の stg の ECR の両方にログインする
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        with:
+          registries: ${{ steps.accounts.outputs.dev }},${{ steps.accounts.outputs.stg }}
 
       - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
 
       - name: dev の ECR から stg の ECR へ digest ごとコピー
         env:
           TAG: ${{ steps.tag.outputs.tag }}
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          DEV_ACCOUNT: ${{ steps.accounts.outputs.dev }}
+          STG_ACCOUNT: ${{ steps.accounts.outputs.stg }}
         run: |
+          SRC_REGISTRY="$DEV_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
+          DST_REGISTRY="$STG_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
           # タグが無ければ空文字を返す。権限エラーなどは失敗させる
           digest() {
             local out
-            if out=$(aws ecr describe-images --repository-name "$1" --image-ids imageTag="$TAG" \
+            if out=$(aws ecr describe-images --registry-id "$1" --repository-name "$2" --image-ids imageTag="$TAG" \
                        --query 'imageDetails[0].imageDigest' --output text 2>&1); then
               echo "$out"
             elif grep -q ImageNotFoundException <<<"$out"; then
@@ -59,12 +75,12 @@ jobs:
               echo "$out" >&2; return 1
             fi
           }
-          SRC=$(digest "$SRC_REPO")
+          SRC=$(digest "$DEV_ACCOUNT" "$SRC_REPO")
           [ -n "$SRC" ] || { echo "::error::dev の ECR にタグ $TAG がない。dev で評価済みのコードか確かめよ"; exit 1; }
-          DST=$(digest "$DST_REPO")
+          DST=$(digest "$STG_ACCOUNT" "$DST_REPO")
           if [ -z "$DST" ]; then
-            crane copy "$REGISTRY/$SRC_REPO@$SRC" "$REGISTRY/$DST_REPO:$TAG"
-            DST=$(digest "$DST_REPO")
+            crane copy "$SRC_REGISTRY/$SRC_REPO@$SRC" "$DST_REGISTRY/$DST_REPO:$TAG"
+            DST=$(digest "$STG_ACCOUNT" "$DST_REPO")
           fi
           {
             echo "| | digest |"; echo "|---|---|"

@@ -17,3 +17,6 @@ export const MODEL_ID = 'jp.anthropic.claude-haiku-4-5-20251001-v1:0';
 export const FOUNDATION_MODEL = 'anthropic.claude-haiku-4-5-20251001-v1:0';
 /** jp. プロファイルの推論先（GetInferenceProfile で確認） */
 export const INFERENCE_REGIONS = ['ap-northeast-1', 'ap-northeast-3'];
+
+/** GitHub Actions が引き受けるロール名。stg のロールは stg アカウントに作り、dev の ECR から名指しで許可する */
+export const roleName = (purpose: 'dev-deploy' | 'eval' | 'stg-deploy') => `${PREFIX}-gha-${purpose}`;
