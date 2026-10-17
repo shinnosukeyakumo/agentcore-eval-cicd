@@ -57,6 +57,8 @@ export class AgentStack extends cdk.Stack {
         // 検証のため全件を採点する。実運用では会話量と費用に合わせて下げる
         samplingPercentage: 100,
         sessionTimeout: cdk.Duration.minutes(2),
+        // 型定義の説明では既定が ENABLED だが、指定しないと CloudFormation の既定（DISABLED）になる（aws-cdk-lib 2.272.0）
+        executionStatus: agentcore.ExecutionStatus.ENABLED,
       });
     }
 
