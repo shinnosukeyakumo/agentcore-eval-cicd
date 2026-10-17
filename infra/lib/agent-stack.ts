@@ -41,6 +41,25 @@ export class AgentStack extends cdk.Stack {
       }),
     );
 
+    // stg（実運用では prd）は、リリース後の実際の会話をオンライン評価で採点し続ける。
+    // 正解データは渡せないので、正解なしで使える評価器だけを選ぶ
+    if (props.stage === 'stg') {
+      new agentcore.OnlineEvaluationConfig(this, 'OnlineEvaluation', {
+        onlineEvaluationConfigName: `${runtimeName(props.stage)}_online`,
+        description: 'stg の会話を継続的に採点する',
+        dataSource: agentcore.DataSourceConfig.fromAgentRuntimeEndpoint(runtime),
+        evaluators: [
+          agentcore.EvaluatorSelector.builtin(agentcore.BuiltinEvaluator.CORRECTNESS),
+          agentcore.EvaluatorSelector.builtin(agentcore.BuiltinEvaluator.FAITHFULNESS),
+          agentcore.EvaluatorSelector.builtin(agentcore.BuiltinEvaluator.TOOL_SELECTION_ACCURACY),
+          agentcore.EvaluatorSelector.builtin(agentcore.BuiltinEvaluator.REFUSAL),
+        ],
+        // 検証のため全件を採点する。実運用では会話量と費用に合わせて下げる
+        samplingPercentage: 100,
+        sessionTimeout: cdk.Duration.minutes(2),
+      });
+    }
+
     new cdk.CfnOutput(this, 'RuntimeArn', { value: runtime.agentRuntimeArn });
     new cdk.CfnOutput(this, 'RuntimeId', { value: runtime.agentRuntimeId });
     new cdk.CfnOutput(this, 'ImageTag', { value: props.imageTag });
