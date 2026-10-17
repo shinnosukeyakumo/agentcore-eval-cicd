@@ -112,3 +112,51 @@ GoalSuccessRate は、範囲外の問いを外したことで 1.00 に安定し�
 - **rc Runtime は 1 つなので、評価は同時に 1 件ずつ**。GitHub の concurrency は、同じグループに待機中の実行があると古いほうを取り消す。リリース PR が同時に 3 つ以上あると、真ん中の評価が「取り消し」になり再実行が要る。リリースは 1 本ずつ流す運用を前提にする
 - **rc スタックの CloudFormation 上のイメージタグは古いまま**になる。rc を `cdk deploy` し直すと、初回のタグに戻る
 - 1 アカウントでの再現なので、評価用ロールが rc 以外に触れないことは IAM ポリシーで絞っているだけだ。実案件では rc を dev アカウントに置くことで、アカウント境界でも守られる
+
+---
+
+# 3 巡目: dev と stg を別アカウントに分ける（2026-10-17）
+
+1・2 巡目は 1 アカウントの中で ECR・Runtime・ロールを分けて真似ていた。3 巡目では stg 用に別の AWS アカウントを用意し、実際にアカウントをまたいで昇格させた。
+
+## 構成の変更
+
+| | dev アカウント | stg アカウント |
+|---|---|---|
+| 土台のスタック | `AgentCoreEvalCicd-Bootstrap`（OIDC、dev の ECR、dev デプロイ用ロール、評価用ロール） | `AgentCoreEvalCicd-StgBootstrap`（OIDC、stg の ECR、stg デプロイ用ロール） |
+| Runtime | dev、rc（評価用） | stg |
+| ECR の読み取り許可 | dev の ECR のリポジトリポリシーで、stg デプロイ用ロールにだけ読み取り 4 操作を許可 | stg デプロイ用ロールの IAM ポリシーで、dev の ECR の読み取りを許可 |
+
+- 評価用ロールは dev アカウントにしかないので、stg には構造上触れられない
+- アカウント ID はコードに書かず、土台のデプロイ時に `-c devAccount=... -c stgAccount=...` で渡す
+- リポジトリポリシーは相手のロールを ARN で名指しするので、stg の土台を先にデプロイした
+- `deploy-stg.yml` は両方の ECR にログインし（`amazon-ecr-login` の `registries` に 2 アカウントを渡す）、`crane copy` でアカウントをまたいでコピーする。複数レジストリにログインすると `registry` 出力が空になるので、ホスト名はアカウント ID から組み立てる
+
+## 結果
+
+| 段 | 結果 |
+|---|---|
+| release/20261017-acct → stg の PR（dev アカウントの rc で評価） | 合格（6分18秒） |
+| dev の ECR → stg の ECR へのコピー | 成功。両アカウントの digest が `sha256:7288f3…` で一致 |
+| stg アカウントへの cdk deploy | 成功 |
+| 疎通確認 | 1 回目は失敗（下記）。Anthropic の利用目的の申請後に再実行して成功（1分44秒） |
+
+## 新しいアカウントで踏んだこと
+
+| 事象 | 内容 |
+|---|---|
+| アカウントの確認待ち | 作成直後の Bedrock は `Your account is currently being verified` で拒否された。CloudFormation・ECR・AgentCore の API は確認中でも動いた |
+| Anthropic の利用目的の申請 | 未提出のまま一度だけ Converse が通ったが、約 1 時間後には Runtime からも手元からも `Model use case details have not been submitted for this account` で拒否された。申請は必須。申請後は `agreementAvailability` が `NOT_AVAILABLE` から `AVAILABLE` に変わり、すぐ呼べた |
+| 疎通確認の失敗の見え方 | ワークフロー側には `Received error (500) from runtime` としか出ない。原因は stg アカウントの Runtime のロググループに出ていた |
+
+## 評価で見つかったこと
+
+PR #30 の評価で、TrajectoryInOrderMatch が 0.90 だった。中身は shipping-free の 2 試行で、エージェントは送料計算のツールを呼ばずに「東京都への配送は送料無料のため 3,080 円」と答えていた。金額は正しいが理由が違う（正しくは小計が 3,000 円以上だから無料）。
+
+| 評価器 | この回答への点 |
+|---|---|
+| Correctness | 1.0（核心の金額が合っている） |
+| GoalSuccessRate | 0 |
+| TrajectoryInOrderMatch | 0（ツールを呼んでいない） |
+
+重要な問いの最低ラインは Correctness にしか掛けていないので、ゲートは通った。推測で当たった答えは Correctness では見抜けず、軌跡の評価器でしか拾えない。重要な問いには、Trajectory にも最低ラインを掛けるかを検討する余地がある。

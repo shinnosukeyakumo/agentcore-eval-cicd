@@ -253,6 +253,24 @@ def main() -> None:
         by_key = {(r.case["id"], r.trial): r for r in retried}
         runs = [by_key.get((r.case["id"], r.trial), r) for r in runs]
 
+    # ツールのスパンは遅れて届くことがあり、その間に採点すると Trajectory が 0 になる。
+    # 最低ラインを下回った試行だけ、少し待って採点し直し、後の結果を採る。
+    # 本当にツールを呼んでいなければ、採点し直しても 0 のままなので不合格は変わらない
+    critical = config.get("critical", {})
+    suspects = [r for r in runs if critical_violations([r], critical)]
+    if suspects:
+        print(f"最低ラインを下回った {len(suspects)} 件を、90 秒待って採点し直す")
+        time.sleep(90)
+
+        def rescore(run: Run) -> None:
+            before = run.results
+            score(client, runtime["agentRuntimeId"], run, evaluators)
+            if not is_complete(run, evaluators):
+                run.results = before  # 採点し直しが空振りしたら元の結果を残す（不合格を見逃さない）
+
+        with ThreadPoolExecutor(workers) as pool:
+            list(pool.map(rescore, suspects))
+
     values: dict[str, list[float]] = defaultdict(list)
     for run in runs:
         for r in run.results:
