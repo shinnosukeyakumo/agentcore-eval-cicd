@@ -8,6 +8,11 @@
 .kiro/
 .agents/
 
+# CloudWatch Omni の VS Code 拡張は、フォルダを開くたびに .github/ の行が無ければ末尾に足す。
+# 先に .github/ を書いて書き足しを止め、直後の行で打ち消して .github/ を git に残す
+.github/
+!.github/
+
 # Python
 __pycache__/
 *.pyc
