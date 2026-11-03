@@ -7,11 +7,11 @@
 
 AgentCore Runtime 上のエージェントを GitHub Actions で dev → stg に上げるときに、AgentCore Evaluations で採点して、点が足りなければ stg へマージできないようにする仕組みの検証用リポジトリです。
 
-![コンテナイメージが dev の ECR から dev・rc・stg の各 Runtime へ流れる構成](docs/images/architecture.drawio.png)
+![dev アカウントでビルドしたイメージを rc で評価し、stg アカウントへコピーして動かす構成。stg のオンライン評価の点が下がると、CloudWatch のアラームから SNS・Lambda・AgentCore Gateway を経て Slack に届く](docs/images/architecture.drawio.png)
 
 LLM による評価は、release ブランチから stg への PR でだけ回します。feature → dev の PR ではテストしか走らないので、PR が増えても評価の回数は増えません。
 
-イメージは dev へのマージ時に一度だけビルドし、評価用の rc Runtime と stg にはそのイメージをそのまま使います。stg への適用は手動で、承認者の承認を挟みます。stg の Runtime にはオンライン評価を付けていて、リリース後の会話も正解なしの評価器で採点し続けます。
+イメージは dev へのマージ時に一度だけビルドし、評価用の rc Runtime と stg にはそのイメージをそのまま使います。stg への適用は手動で、承認者の承認を挟みます。stg の Runtime にはオンライン評価を付けていて、リリース後の会話も正解なしの評価器で採点し続けます。1 時間の平均点が閾値を下回ると、CloudWatch のアラームから SNS・Lambda・AgentCore Gateway を経て Slack に知らせます。Slack のトークンは AgentCore Identity に置き、Gateway が送信時に付けるので、Lambda には渡しません。
 
 ## ワークフロー
 
@@ -97,6 +97,8 @@ agent/            Strands エージェントと Dockerfile（arm64）
 infra/            CDK（TypeScript）
   lib/bootstrap-stack.ts   OIDC プロバイダ・ECR・GitHub Actions 用ロール
   lib/agent-stack.ts       dev / rc / stg の AgentCore Runtime
+  lib/quality-alert.ts     オンライン評価のアラームと Slack 通知（stg）
+  lambda/notify_slack.py   アラームを Gateway 経由で Slack に送る
 eval/
   dataset.json    評価用の問いと正解
   config.json     閾値と重要な問いの最低ライン
@@ -166,6 +168,22 @@ gh pr create --base stg --head release/$(date +%Y%m%d)
 ```
 
 評価に通ったらマージし、Actions の画面から stg ブランチで `deploy-stg` を実行します。
+
+### 5. 品質低下の通知（任意）
+
+Repository variables に `SLACK_CHANNEL_ID`（通知先のチャンネル ID）を登録すると、次の `deploy-stg` でアラームと通知の仕組みが stg にできます。登録しなければ作られません。
+
+Slack 側では、`chat:write` を持つボットのトークン（`xoxb-`）を用意し、ボットを通知先のチャンネルに招待しておきます。トークンは CloudFormation に載せないので、デプロイ後に手元からシークレットへ入れます。画面にもシェルの履歴にも残らないよう、`read -rs` で受け取ります。
+
+```bash
+SECRET=$(aws cloudformation describe-stack-resources --profile <stg のプロファイル> \
+  --stack-name AgentCoreEvalCicd-stg \
+  --query "StackResources[?ResourceType=='AWS::SecretsManager::Secret'].PhysicalResourceId" --output text)
+read -rs SLACK_TOKEN
+aws secretsmanager put-secret-value --profile <stg のプロファイル> --secret-id "$SECRET" \
+  --secret-string "$(jq -n --arg t "$SLACK_TOKEN" '{token: $t}')"
+unset SLACK_TOKEN
+```
 
 ### 手元での実行
 
