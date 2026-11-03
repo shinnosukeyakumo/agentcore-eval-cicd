@@ -3,12 +3,15 @@ import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
+import { QualityAlert } from './quality-alert';
 import { FOUNDATION_MODEL, INFERENCE_REGIONS, MODEL_ID, Stage, repoStageOf, repositoryName, runtimeName } from './config';
 
 export interface AgentStackProps extends cdk.StackProps {
   readonly stage: Stage;
   /** ECR のイメージタグ（agent/ フォルダのツリーハッシュ） */
   readonly imageTag: string;
+  /** 品質低下の通知先（Slack のチャンネル ID）。stg でだけ使う */
+  readonly slackChannel?: string;
 }
 
 export class AgentStack extends cdk.Stack {
@@ -44,7 +47,7 @@ export class AgentStack extends cdk.Stack {
     // stg（実運用では prd）は、リリース後の実際の会話をオンライン評価で採点し続ける。
     // 正解データは渡せないので、正解なしで使える評価器だけを選ぶ
     if (props.stage === 'stg') {
-      new agentcore.OnlineEvaluationConfig(this, 'OnlineEvaluation', {
+      const onlineEvaluation = new agentcore.OnlineEvaluationConfig(this, 'OnlineEvaluation', {
         onlineEvaluationConfigName: `${runtimeName(props.stage)}_online`,
         description: 'stg の会話を継続的に採点する',
         dataSource: agentcore.DataSourceConfig.fromAgentRuntimeEndpoint(runtime),
@@ -60,6 +63,18 @@ export class AgentStack extends cdk.Stack {
         // 型定義の説明では既定が ENABLED だが、指定しないと CloudFormation の既定（DISABLED）になる（aws-cdk-lib 2.272.0）
         executionStatus: agentcore.ExecutionStatus.ENABLED,
       });
+
+      // 通知先のチャンネル ID を渡したときだけ、点が下がったら Slack に通知する仕組みを足す
+      if (props.slackChannel) {
+        const alert = new QualityAlert(this, 'QualityAlert', {
+          onlineEvaluation,
+          serviceName: `${runtimeName(props.stage)}.DEFAULT`,
+          slackChannel: props.slackChannel,
+        });
+        // 閾値はリリース前のゲート（eval/config.json）と揃える。Refusal は断ったときに 1 になる指標なので鳴らさない
+        alert.addScoreAlarm('CorrectnessAlarm', 'Builtin.Correctness', 0.8);
+        alert.addScoreAlarm('ToolSelectionAlarm', 'Builtin.ToolSelectionAccuracy', 0.8);
+      }
     }
 
     new cdk.CfnOutput(this, 'RuntimeArn', { value: runtime.agentRuntimeArn });

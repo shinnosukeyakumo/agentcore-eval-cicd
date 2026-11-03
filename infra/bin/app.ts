@@ -33,8 +33,9 @@ if (devAccount && stgAccount) {
 // imageTag を渡したときだけ環境スタックを合成する
 const imageTag: string | undefined = app.node.tryGetContext('imageTag');
 if (imageTag) {
+  const slackChannel: string | undefined = app.node.tryGetContext('slackChannel');
   for (const stage of STAGES) {
-    new AgentStack(app, `AgentCoreEvalCicd-${stage}`, { env, stage: stage as Stage, imageTag });
+    new AgentStack(app, `AgentCoreEvalCicd-${stage}`, { env, stage: stage as Stage, imageTag, slackChannel });
   }
 }
 
