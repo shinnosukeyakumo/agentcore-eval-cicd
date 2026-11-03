@@ -7,11 +7,11 @@
 
 AgentCore Runtime 上のエージェントを GitHub Actions で dev → stg に上げるときに、AgentCore Evaluations で採点して、点が足りなければ stg へマージできないようにする仕組みの検証用リポジトリです。
 
-![コンテナイメージが dev の ECR から dev・rc・stg の各 Runtime へ流れる構成](docs/images/architecture.drawio.png)
+![dev アカウントでビルドしたイメージを rc で評価し、stg アカウントへコピーして動かす構成。stg のオンライン評価の点が下がると、CloudWatch のアラームから SNS・Lambda・AgentCore Gateway を経て Slack に届く](docs/images/architecture.drawio.png)
 
 LLM による評価は、release ブランチから stg への PR でだけ回します。feature → dev の PR ではテストしか走らないので、PR が増えても評価の回数は増えません。
 
-イメージは dev へのマージ時に一度だけビルドし、評価用の rc Runtime と stg にはそのイメージをそのまま使います。stg への適用は手動です。
+イメージは dev へのマージ時に一度だけビルドし、評価用の rc Runtime と stg にはそのイメージをそのまま使います。stg への適用は手動で、承認者の承認を挟みます。stg の Runtime にはオンライン評価を付けていて、リリース後の会話も正解なしの評価器で採点し続けます。1 時間の平均点が閾値を下回ると、CloudWatch のアラームから SNS・Lambda・AgentCore Gateway を経て Slack に知らせます。Slack のトークンは AgentCore Identity に置き、Gateway が送信時に付けるので、Lambda には渡しません。
 
 ## ワークフロー
 
@@ -50,7 +50,7 @@ ECR のタグには `agent/` フォルダのツリーハッシュ（`git rev-par
 合格の条件は [`eval/config.json`](eval/config.json) で決めています。
 
 - 評価器ごとの平均がすべて 0.8 以上
-- 重要な問い（`critical`）は、1 試行でも Correctness が 1.0 未満なら不合格
+- 重要な問い（`critical`）は、1 試行でも Correctness か TrajectoryInOrderMatch が 1.0 未満なら不合格（最低ラインを下回った試行は 90 秒待って採点し直す。ツールのスパンが遅れて届くことがあるため）
 - スパンが揃わず採点できなかった場合は、不合格とは別に「採点不能」として扱う
 
 2 つ目の条件は、平均だけで判定していたら送料の問い 1 問の誤答が通ってしまったので足しました。下の例では Correctness の平均は 0.88 で閾値を超えていますが、送料の問いで不合格になっています。
@@ -70,6 +70,8 @@ ECR のタグには `agent/` フォルダのツリーハッシュ（`git rev-par
 | V5 | 送料ツールを外す | 不合格 | 13分18秒 |
 | V6 | 正常なリリース | 合格。rc の差し替えは 11 秒 | 4分22秒 |
 | V7 | stg を別アカウントに分けて正常なリリース | 合格。アカウントをまたいだコピー後も digest が一致 | 6分18秒 |
+| V8 | 正常な版を無変更で 5 回評価 | 5 回とも合格。全評価器 1.00 | 3分21秒〜13分09秒 |
+| 参考 | 同じ 8 問を人が手で 1 回ずつ確かめる | 8 問とも正しいと判断。2分56秒 | - |
 
 経緯と数字の詳細は [docs/verify-results.md](docs/verify-results.md) にあります。
 
@@ -84,7 +86,9 @@ ECR のタグには `agent/` フォルダのツリーハッシュ（`git rev-par
 | UpdateAgentRuntime の直後は status が READY のまま返ることがある | version が上がって READY になるまで待つようにした |
 | 新しい GitHub リポジトリは OIDC の `sub` が `repo:owner@<id>/repo@<id>:...` の形式になっている | 信頼ポリシーをこの形式で書いた |
 | 新しい AWS アカウントでは、Anthropic の利用目的の申請を出すまで Claude を呼べない（申請前に一度だけ通ったが、すぐに拒否されるようになった） | 申請を出した。疎通確認の失敗は `500 from runtime` としか出ないので、原因は Runtime のログで確かめる |
-| ツールを呼ばずに推測で金額を当てた回答を、Correctness は満点にした | `TrajectoryInOrderMatch` が 0 点で拾った |
+| ツールを呼ばずに推測で金額を当てた回答を、Correctness は満点にした | `TrajectoryInOrderMatch` が 0 点で拾ったので、重要な問いの最低ラインに足した |
+| ツールのスパンが遅れて届き、ツールを呼んでいるのに Trajectory が 0 になった | 最低ラインを下回った試行だけ、待って採点し直す |
+| CDK の `OnlineEvaluationConfig` は、`executionStatus` を指定しないと停止した状態で作られた（型定義の説明では既定は ENABLED） | `ExecutionStatus.ENABLED` を明示した |
 
 ## ディレクトリ
 
@@ -93,6 +97,8 @@ agent/            Strands エージェントと Dockerfile（arm64）
 infra/            CDK（TypeScript）
   lib/bootstrap-stack.ts   OIDC プロバイダ・ECR・GitHub Actions 用ロール
   lib/agent-stack.ts       dev / rc / stg の AgentCore Runtime
+  lib/quality-alert.ts     オンライン評価のアラームと Slack 通知（stg）
+  lambda/notify_slack.py   アラームを Gateway 経由で Slack に送る
 eval/
   dataset.json    評価用の問いと正解
   config.json     閾値と重要な問いの最低ライン
@@ -162,6 +168,22 @@ gh pr create --base stg --head release/$(date +%Y%m%d)
 ```
 
 評価に通ったらマージし、Actions の画面から stg ブランチで `deploy-stg` を実行します。
+
+### 5. 品質低下の通知（任意）
+
+Repository variables に `SLACK_CHANNEL_ID`（通知先のチャンネル ID）を登録すると、次の `deploy-stg` でアラームと通知の仕組みが stg にできます。登録しなければ作られません。
+
+Slack 側では、`chat:write` を持つボットのトークン（`xoxb-`）を用意し、ボットを通知先のチャンネルに招待しておきます。トークンは CloudFormation に載せないので、デプロイ後に手元からシークレットへ入れます。画面にもシェルの履歴にも残らないよう、`read -rs` で受け取ります。
+
+```bash
+SECRET=$(aws cloudformation describe-stack-resources --profile <stg のプロファイル> \
+  --stack-name AgentCoreEvalCicd-stg \
+  --query "StackResources[?ResourceType=='AWS::SecretsManager::Secret'].PhysicalResourceId" --output text)
+read -rs SLACK_TOKEN
+aws secretsmanager put-secret-value --profile <stg のプロファイル> --secret-id "$SECRET" \
+  --secret-string "$(jq -n --arg t "$SLACK_TOKEN" '{token: $t}')"
+unset SLACK_TOKEN
+```
 
 ### 手元での実行
 

@@ -98,7 +98,8 @@ jobs:
         working-directory: infra
         run: |
           npm ci
-          npx cdk deploy AgentCoreEvalCicd-stg -c imageTag=${{ steps.tag.outputs.tag }} --require-approval never
+          # 品質低下の通知先。未設定だと通知の仕組みごと作らない
+          npx cdk deploy AgentCoreEvalCicd-stg -c imageTag=${{ steps.tag.outputs.tag }} -c slackChannel=${{ vars.SLACK_CHANNEL_ID }} --require-approval never
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: 疎通確認
