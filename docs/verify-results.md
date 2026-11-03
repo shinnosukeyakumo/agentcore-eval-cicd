@@ -237,6 +237,28 @@ stg の Runtime に `OnlineEvaluationConfig` を付けた。正解データは�
 - CDK の `OnlineEvaluationConfig` は、型定義の説明では `executionStatus` の既定が `ENABLED` だが、指定しないと `DISABLED` で作られた（aws-cdk-lib 2.272.0）。`ExecutionStatus.ENABLED` を明示して直した。詳細は [oss-findings.md](oss-findings.md)
 - stg の `aws login` 形式のプロファイルを Python（boto3）から使うには `botocore[crt]` が要る。`aws configure export-credentials --format env` で一時的な認証情報を書き出して回避した
 
+### 点が下がったら Slack に通知する（2026-11-03）
+
+`infra/lib/quality-alert.ts` で、オンライン評価の点にアラームを付け、Slack に通知するようにした。
+
+> アラーム → SNS → Lambda → AgentCore Gateway（OpenAPI ターゲット）→ Slack `chat.postMessage`
+
+- Slack のボットトークンは AgentCore Identity の API キーとして登録した。値は自前の Secrets Manager シークレットに置き、Identity からは `EXTERNAL` で参照している。Gateway は送信のたびにトークンを取り出し、`Authorization: Bearer` ヘッダーに付ける。Lambda もテンプレートもトークンを持たない
+- メトリクスは名前空間 `Bedrock-AgentCore/Evaluations` に、評価器名をメトリクス名として出る（`Builtin.Correctness` など）。値は採点 1 回ごとの点（0〜1）。採点結果がログに出てから、約 1 分後に見えた
+- アラームは Correctness と ToolSelectionAccuracy の 1 時間平均で、閾値はリリース前のゲートと同じ 0.8 にした。Refusal は断ったときに 1 になる指標なので、アラームを付けていない
+- 確かめたこと:
+  - 仮のトークンでは Slack が `invalid_auth` を返した。ヘッダーが付かなければ `not_authed` になる
+  - 本物のトークンで、自分だけのチャンネルに試しの投稿をした。Slack は `ok: true` を返した
+  - アラームの状態が変わったときにも、通知が Lambda まで自動で流れた
+
+まだ確かめていないのは、品質をわざと落とした版を stg に出したときに、実際にアラームが鳴るかどうかだ。
+
+#### つまずいたこと
+
+- `ApiKeyCredentialProvider` を `apiKey` なしで作ると、CloudFormation が `ApiKey is required when secret source is MANAGED or not specified` で失敗する。CDK の L2 は `EXTERNAL` を受け取らないので、L1 のプロパティを上書きした。その場合、L2 が Gateway のロールに付けるシークレットの読み取り権限は Identity 管理のシークレット（`bedrock-agentcore-identity!*`）向けだけなので、自前のシークレットの読み取り権限を足した
+- Slack が `ok: false` を返しても、Gateway の応答は `isError: false` のままだった。Lambda で Slack の応答を読み、失敗なら例外にした
+- コンソールのコネクターにある Slack は、コンソール専用のテンプレートだった。CDK からは使えないので、`chat.postMessage` だけの OpenAPI スキーマを自分で書いた
+
 ## 手動確認との比較
 
 `eval/manual_check.py` で、人（リポジトリの持ち主）が 8 問を 1 回ずつ手で確かめた（2026-10-18、dev の Runtime）。
