@@ -22,25 +22,34 @@ def format_alarm(alarm: dict) -> str:
     state = alarm.get("NewStateValue")
     head = ":rotating_light: 品質が閾値を下回った" if state == "ALARM" else ":white_check_mark: 品質が閾値まで戻った"
     trigger = alarm.get("Trigger", {})
-    return "\n".join([
-        f"{head}（{alarm.get('AlarmName')}）",
-        f"評価器: {trigger.get('MetricName')}",
-        f"閾値: {trigger.get('Threshold')}",
-        f"理由: {alarm.get('NewStateReason')}",
-    ])
+    return "\n".join(
+        [
+            f"{head}（{alarm.get('AlarmName')}）",
+            f"評価器: {trigger.get('MetricName')}",
+            f"閾値: {trigger.get('Threshold')}",
+            f"理由: {alarm.get('NewStateReason')}",
+        ]
+    )
 
 
 def call_tool(arguments: dict) -> dict:
-    body = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": TOOL_NAME, "arguments": arguments},
-    })
-    req = AWSRequest(method="POST", url=GATEWAY_URL, data=body, headers={
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-    })
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": TOOL_NAME, "arguments": arguments},
+        }
+    )
+    req = AWSRequest(
+        method="POST",
+        url=GATEWAY_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
     SigV4Auth(boto3.Session().get_credentials(), "bedrock-agentcore", REGION).add_auth(req)
     http = urllib.request.Request(GATEWAY_URL, data=body.encode(), headers=dict(req.headers), method="POST")
     with urllib.request.urlopen(http, timeout=20) as res:
