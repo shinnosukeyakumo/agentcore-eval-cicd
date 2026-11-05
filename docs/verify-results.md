@@ -252,6 +252,12 @@ stg の Runtime に `OnlineEvaluationConfig` を付けた。正解データは�
   - アラームの状態が変わったときにも、通知が Lambda まで自動で流れた
 
 
+#### つまずいたこと
+
+- `ApiKeyCredentialProvider` を `apiKey` なしで作ると、CloudFormation が `ApiKey is required when secret source is MANAGED or not specified` で失敗する。CDK の L2 は `EXTERNAL` を受け取らないので、L1 のプロパティを上書きした。その場合、L2 が Gateway のロールに付けるシークレットの読み取り権限は Identity 管理のシークレット（`bedrock-agentcore-identity!*`）向けだけなので、自前のシークレットの読み取り権限を足した
+- Slack が `ok: false` を返しても、Gateway の応答は `isError: false` のままだった。Lambda で Slack の応答を読み、失敗なら例外にした
+- コンソールのコネクターにある Slack は、コンソール専用のテンプレートだった。CDK からは使えないので、`chat.postMessage` だけの OpenAPI スキーマを自分で書いた
+
 ### わざと落とした版でアラームが鳴るか（2026-11-03〜04）
 
 送料を計算するツールを外した版（V5、`agent/` のツリー `8c92fc9`）を stg に出し、評価用の 8 問を 3 回ずつ、計 24 回の会話を流した。V5 は送料の質問に「計算できません」と答える。
@@ -286,11 +292,24 @@ Correctness で 0 点になったのは、北海道への送料を聞く 3 回�
 - 通知の Lambda を足したコミットから、dev の CI（`ruff format --check`）が 6 回続けて落ちていた。管理者の権限で dev に直接 push していたので、必須チェックが素通りになり、気づくのが遅れた
 - `aws login` で取った認証情報を boto3 で読むには `botocore[crt]` が要る。入れずに済ませるなら、`aws configure export-credentials --format env` で環境変数に書き出して渡す
 
-#### つまずいたこと
+### もっともらしい誤答はオンライン評価で拾えるか（2026-11-05）
 
-- `ApiKeyCredentialProvider` を `apiKey` なしで作ると、CloudFormation が `ApiKey is required when secret source is MANAGED or not specified` で失敗する。CDK の L2 は `EXTERNAL` を受け取らないので、L1 のプロパティを上書きした。その場合、L2 が Gateway のロールに付けるシークレットの読み取り権限は Identity 管理のシークレット（`bedrock-agentcore-identity!*`）向けだけなので、自前のシークレットの読み取り権限を足した
-- Slack が `ok: false` を返しても、Gateway の応答は `isError: false` のままだった。Lambda で Slack の応答を読み、失敗なら例外にした
-- コンソールのコネクターにある Slack は、コンソール専用のテンプレートだった。CDK からは使えないので、`chat.postMessage` だけの OpenAPI スキーマを自分で書いた
+本州以外の送料を 1,200 円から 500 円に書き換えた版（V1、`agent/` のツリー `7fc853c`）を stg に出し、同じく 24 回の会話を流した。V1 は北海道への送料を「500 円、合計 2,480 円」と答える。正しくは 1,200 円、合計 3,180 円だ。リリース前の評価ゲートでは、正解と突き合わせて不合格になった版である（2 巡目の表の V1）。
+
+流す前に「点は下がらず、アラームは鳴らない」と予測した。オンライン評価には正解がなく、ツールの出力と矛盾しない誤答は見抜けないと考えたためだ。
+
+| 評価器 | 平均 | アラーム |
+|---|---:|---|
+| Builtin.Correctness | 1.00（24/24） | 鳴らない |
+| Builtin.Faithfulness | 1.00 | — |
+| Builtin.ToolSelectionAccuracy | 1.00 | 鳴らない |
+| michikusa_stg_task_completion | 1.00（24/24） | 鳴らない |
+
+予測どおりだった。北海道の送料を聞いた 3 回は、Correctness がいずれも「ツールの出力（送料 500、合計 2480）と完全に一致する」として 1 点を付けた。カスタム評価器も「ツールで確かめた具体的な答えを返した」として 1 点だった。
+
+- 誤りがツールの中にあると、ツールの出力を基準に採点する評価器では見つからない。V5 を拾えたカスタム評価器も、答えを返したかどうかしか見ていない
+- この種の劣化を止めるのは、正解データを持つリリース前のゲートだ。オンライン評価はゲートの代わりにならない
+- 終わったあと、手元から良い版（`cc195c2`）を stg に戻した。stg ブランチの中身と同じ版である
 
 ## 手動確認との比較
 
